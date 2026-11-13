@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>HX-50</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+ body{font:14px system-ui,sans-serif;margin:0;padding:16px 24px;color:#1b1f24;background:#fff;max-width:1100px}
+ h1{margin:0 0 4px} h2{margin:24px 0 8px;font-size:16px} .sub{color:#667;margin-bottom:12px}
+ table{border-collapse:collapse;width:100%} th,td{padding:4px 8px;border-bottom:1px solid #e3e6ea;text-align:left;vertical-align:top}
+ th{background:#f5f6f8} td.n,th.n{text-align:right} .tag{font-size:12px;color:#667}
+ .row{display:flex;gap:24px;flex-wrap:wrap} .row>div{flex:1;min-width:300px} .scroll{max-height:380px;overflow:auto}
+ select,input{font:inherit;padding:3px 6px} .names{font-size:12px;color:#334}
+#ctl{background:#f5f6f8;padding:8px 12px;border-radius:6px} button{font:inherit;padding:3px 10px}
+ .rebal{color:#1f6feb}</style></head><body>
+<h1>HX-50 <span class="tag">equal-weight, ranks 11–60 by market cap, weekly rebalance</span></h1>
+<div class="sub">All numbers come from the API (<code>/index</code>, <code>/composition</code>, <code>/changes</code>, <code>/summary</code>).</div>
+
+<div id="ctl"><b>Mandate</b>
+ names <input id="p_n" type="number" min="1" style="width:60px">
+ exclude top <input id="p_k" type="number" min="0" style="width:60px">
+ buffer (ranks) <input id="p_b" type="number" min="0" style="width:60px">
+ top-edge buffer <input id="p_t" type="number" min="0" style="width:60px" title="0 = strict: top-10 names never held">
+ <button id="rb">Rebuild</button> <span id="meta" class="tag"></span></div>
+
+<h2>Index level — stabilised vs unstabilised</h2>
+<canvas id="lv" height="90"></canvas>
+
+<h2>R5: stabilised vs unstabilised</h2>
+<div id="sum"></div>
+
+<div class="row">
+<div>
+ <h2>Composition on <input type="date" id="d"> <select id="v"><option value="stabilised">stabilised</option><option value="raw">unstabilised</option></select></h2>
+ <div id="cinfo" class="tag"></div>
+ <div class="scroll"><table id="comp"></table></div>
+</div>
+<div>
+ <h2>Rebalances &amp; turnover</h2>
+ <div class="scroll"><table id="chg"></table></div>
+</div>
+</div>
+<script>
+// This page holds no index logic: it only fetches numbers from the API and draws them.
+const $=id=>document.getElementById(id), pct=x=>(x*100).toFixed(2)+'%';
+const j=u=>fetch(u).then(r=>{if(!r.ok)throw new Error(u+' -> '+r.status);return r.json()});
+let chart;
+// level chart + default composition date
+async function drawLevels(){
+  const [a,b]=await Promise.all([j('/index?variant=stabilised'),j('/index?variant=raw')]);
+  chart&&chart.destroy();
+  chart=new Chart($('lv'),{type:'line',data:{labels:a.map(x=>x.date),datasets:[
+    {label:'stabilised',data:a.map(x=>x.level),borderColor:'#1f6feb',pointRadius:0,borderWidth:2},
+    {label:'unstabilised',data:b.map(x=>x.level),borderColor:'#d1881b',pointRadius:0,borderWidth:1.5,borderDash:[5,3]}]},
+    options:{interaction:{mode:'index',intersect:false},scales:{x:{ticks:{maxTicksLimit:10}}}}});
+  const first=a[0].date,last=a[a.length-1].date; window.__rebal=Object.fromEntries(a.map(x=>[x.date,x.rebalanced]));
+  const mid=[...a].reverse().find(x=>!x.rebalanced); // default to a drifted (mid-week) day so weights are visibly live
+  $('d').min=first;$('d').max=last;$('d').value=(mid||a[a.length-1]).date;
+}
+// R5 comparison table
+async function drawSummary(){
+  const s=await j('/summary'), m=Object.fromEntries(s.map(r=>[r.variant,r]));
+  const rows=[['Rebalances','rebalances',v=>v],['Avg one-way turnover / rebalance','avg_turnover',pct],['Total one-way turnover','total_turnover',pct],['… of which membership changes','total_turnover_membership',pct],['… of which reweighting to 2%','total_turnover_reweight',pct],
+   ['Names added','names_added',v=>v],['Re-entries within 4 rebalances','reentries_within_window',v=>v],
+   ['Cumulative return (gross)','cum_return_gross',pct],['Est. cost drag','est_cost_drag',pct],['Cumulative return (net, approx)','cum_return_net_approx',pct],['Final level','final_level',v=>v.toFixed(2)]];
+  $('sum').innerHTML='<table><tr><th></th><th class=n>Stabilised</th><th class=n>Unstabilised</th></tr>'+
+   rows.map(([l,k,f])=>`<tr><td>${l}</td><td class=n>${f(m.stabilised[k])}</td><td class=n>${f(m.raw[k])}</td></tr>`).join('')+'</table>';
+}
+// holdings table for the chosen date
+async function drawComp(){
+  const c=await j(`/composition?date=${$('d').value}&variant=${$('v').value}`);
+  $('cinfo').textContent=`as of ${c.as_of} · ${c.count} names · weights sum ${pct(c.weight_sum)} · `+(window.__rebal[c.as_of]?'rebalance day: weights reset to equal':'between rebalances: weights have drifted');
+  $('comp').innerHTML='<tr><th>Ticker</th><th class=n>Weight</th><th class=n>vs equal</th><th class=n>Mkt-cap rank</th></tr>'+
+   c.constituents.map(x=>`<tr><td>${x.ticker}</td><td class=n>${pct(x.weight)}</td><td class=n>${((x.weight*c.count-1)*100).toFixed(1)}%</td><td class=n>${x.market_cap_rank??'–'}</td></tr>`).join('');
+}
+// rebalance history table
+async function drawChanges(){
+  const c=await j(`/changes?variant=${$('v').value}`);
+  $('chg').innerHTML='<tr><th>Date</th><th class=n>Turnover</th><th class=n title="buying adds, selling drops">of which membership</th><th class=n title="trimming or topping-up retained names back to equal weight">of which reweight</th><th>Added / dropped</th></tr>'+
+   c.map(x=>`<tr><td>${x.date}</td><td class=n>${x.initial_construction?'initial':pct(x.turnover)}</td><td class=n>${x.initial_construction?'':pct(x.turnover_membership)}</td><td class=n>${x.initial_construction?'':pct(x.turnover_reweight)}</td>
+   <td class=names>${x.initial_construction?'—':`+${x.added.length}: ${x.added.join(', ')||'–'}<br>−${x.dropped.length}: ${x.dropped.join(', ')||'–'}`}</td></tr>`).join('');
+}
+// mandate boxes + run-id line
+async function drawMeta(){
+  const m=await j('/meta'); $('p_n').value=m.params.n; $('p_k').value=m.params.exclude_top; $('p_b').value=m.params.buffer; $('p_t').value=m.params.top_buffer;
+  $('meta').textContent=`run ${m.manifest.run_id} · data ${m.manifest.data_sha256.slice(0,8)} · ${m.manifest.first_date} → ${m.manifest.last_date} (${m.manifest.trading_days} days) · built ${m.manifest.built_at}`;
+}
+// redraw everything
+async function refresh(){await drawMeta();await drawLevels();await drawSummary();await drawComp();await drawChanges()}
+// rebuild button: POST new mandate, then redraw
+$('rb').onclick=async()=>{
+  $('rb').disabled=true; $('meta').textContent='rebuilding…';
+  try{const r=await fetch(`/rebuild?n=${$('p_n').value}&exclude_top=${$('p_k').value}&buffer=${$('p_b').value}&top_buffer=${$('p_t').value}`,{method:'POST'});
+      if(!r.ok){const e=await r.json();alert('Rebuild failed: '+e.detail)} await refresh()}
+  catch(e){alert(e.message)} finally{$('rb').disabled=false}
+};
+$('d').onchange=drawComp; $('v').onchange=()=>{drawComp();drawChanges()};
+(async()=>{try{await refresh()}catch(e){document.body.insertAdjacentHTML('afterbegin','<p style="color:#b00">'+e.message+'</p>')}})();
+</script></body></html>

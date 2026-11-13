@@ -1,0 +1,8 @@
+pandas
+fastapi
+uvicorn
+httpx
+yfinance
+requests
+lxml
+pytest

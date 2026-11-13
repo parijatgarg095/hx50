@@ -1,0 +1,9 @@
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.db
+*.tmp
+# the built zip is created one level up by make_zip.py, but ignore it here too just in case
+parijat-garg-pe-assignment.zip
